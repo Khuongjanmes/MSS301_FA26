@@ -1,0 +1,10 @@
+# IDE (IntelliJ / VS Code)
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+
+# Build output
+target/
+classpath.txt
