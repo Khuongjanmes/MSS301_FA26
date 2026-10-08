@@ -110,6 +110,11 @@ public class BookingService {
                 .stream().map(BookingResponse::from).toList();
     }
 
+    public List<BookingResponse> getAll() {
+        return bookingRepository.findAllByOrderByBookingDateDesc()
+                .stream().map(BookingResponse::from).toList();
+    }
+
     // TODO 8.2
     public BookingResponse getById(Long bookingId, Long userId, String role) {
         return BookingResponse.from(findAccessible(bookingId, userId, role));
