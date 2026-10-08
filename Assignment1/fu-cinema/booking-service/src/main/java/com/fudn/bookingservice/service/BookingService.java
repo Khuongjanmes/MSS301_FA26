@@ -102,6 +102,14 @@ public class BookingService {
         return BookingResponse.from(saved);
     }
 
+    // ======================= F8: HISTORY & CANCEL =======================
+
+    // TODO 8.1
+    public List<BookingResponse> getMyBookings(Long customerId) {
+        return bookingRepository.findByCustomerIdOrderByBookingDateDesc(customerId)
+                .stream().map(BookingResponse::from).toList();
+    }
+
     // ======================= HELPER =======================
 
     private ShowtimeResponse fetchShowtime(String showtimeId) {
