@@ -16,4 +16,13 @@ public interface ShowtimeRepository extends MongoRepository<Showtime, String> {
     List<Showtime> findAllByOrderByStartTimeAsc();
 
     List<Showtime> findByMovieIdOrderByStartTimeAsc(String movieId);
+
+    /**
+     * Sinh ra query:
+     * { roomId: ?0, showtimeStatus: ?1, startTime: { $lt: ?2 }, endTime: { $gt: ?3 }, _id: { $ne: ?4 } }
+     *  -> ?2 = endTime cua suat moi, ?3 = startTime cua suat moi, ?4 = id can bo qua khi update
+     */
+    long countByRoomIdAndShowtimeStatusAndStartTimeLessThanAndEndTimeGreaterThanAndShowtimeIdNot(
+            String roomId, ShowtimeStatus status, LocalDateTime newEndTime, LocalDateTime newStartTime,
+            String excludeShowtimeId);
 }
