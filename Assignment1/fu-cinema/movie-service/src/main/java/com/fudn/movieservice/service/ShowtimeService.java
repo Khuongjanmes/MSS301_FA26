@@ -30,6 +30,17 @@ public class ShowtimeService {
     private final MovieService movieService;
     private final RoomService roomService;
 
+    // TODO 6.4: loc theo movieId va/hoac ngay chieu
+    public List<ShowtimeResponse> search(String movieId, LocalDate date) {
+        List<Showtime> showtimes = (movieId == null || movieId.isBlank())
+                ? showtimeRepository.findAllByOrderByStartTimeAsc()
+                : showtimeRepository.findByMovieIdOrderByStartTimeAsc(movieId);
+        List<Showtime> filtered = showtimes.stream()
+                .filter(s -> date == null || s.getStartTime().toLocalDate().equals(date))
+                .toList();
+        return toResponses(filtered);
+    }
+
     public ShowtimeResponse getById(String id) {
         Showtime s = find(id);
         return ShowtimeResponse.from(s, movieService.find(s.getMovieId()), roomService.find(s.getRoomId()));
@@ -48,6 +59,13 @@ public class ShowtimeService {
             throw ApiException.badRequest("Cannot update a cancelled showtime");
         }
         return apply(showtime, request, id);
+    }
+
+    // TODO 6.4 – BR06: soft delete
+    public void cancel(String id) {
+        Showtime showtime = find(id);
+        showtime.setShowtimeStatus(ShowtimeStatus.CANCELLED);
+        showtimeRepository.save(showtime);
     }
 
     private Showtime find(String id) {
@@ -88,4 +106,16 @@ public class ShowtimeService {
         return ShowtimeResponse.from(showtimeRepository.save(showtime), movie, room);
     }
 
+    /** Application-side join cho danh sach: lay movies & rooms lien quan bang 2 query findAllById */
+    private List<ShowtimeResponse> toResponses(List<Showtime> showtimes) {
+        Map<String, Movie> movies = movieRepository
+                .findAllById(showtimes.stream().map(Showtime::getMovieId).distinct().toList())
+                .stream().collect(Collectors.toMap(Movie::getMovieId, Function.identity()));
+        Map<String, CinemaRoom> rooms = roomRepository
+                .findAllById(showtimes.stream().map(Showtime::getRoomId).distinct().toList())
+                .stream().collect(Collectors.toMap(CinemaRoom::getRoomId, Function.identity()));
+        return showtimes.stream()
+                .map(s -> ShowtimeResponse.from(s, movies.get(s.getMovieId()), rooms.get(s.getRoomId())))
+                .toList();
+    }
 }
