@@ -20,31 +20,34 @@ import java.math.BigDecimal;
 @NoArgsConstructor
 public class UserDTO {
 
+    // Required-field checks only run on create; PUT is a partial update
+    public interface OnCreate {}
+
     private Long userId;
 
-    @NotBlank(message = "Username is required")
+    @NotBlank(groups = UserDTO.OnCreate.class, message = "Username is required")
     @Size(max = 30, message = "Username max length is 30")
     private String username;
 
-    @NotBlank(message = "Email is required")
+    @NotBlank(groups = UserDTO.OnCreate.class, message = "Email is required")
     @Email(message = "Email is invalid")
     @Size(max = 100, message = "Email max length is 100")
     private String email;
 
-    @NotBlank(message = "Role is required")
+    @NotBlank(groups = UserDTO.OnCreate.class, message = "Role is required")
     @Pattern(regexp = UserConstants.ROLE_REGEX, message = "Role must be USER, CREATOR, or ADMIN")
     private String role;
 
-    @NotNull(message = "ratePerPost is required")
+    @NotNull(groups = UserDTO.OnCreate.class, message = "ratePerPost is required")
     @DecimalMin(value = "0", inclusive = false, message = "ratePerPost must be > 0")
     private BigDecimal ratePerPost;
 
-    @NotNull(message = "maxDailyPosts is required")
+    @NotNull(groups = UserDTO.OnCreate.class, message = "maxDailyPosts is required")
     @Min(value = 1, message = "maxDailyPosts must be >= 1")
     @Max(value = 10, message = "maxDailyPosts must be <= 10")
     private Integer maxDailyPosts;
 
-    @NotNull(message = "level is required")
+    @NotNull(groups = UserDTO.OnCreate.class, message = "level is required")
     @Min(value = 1, message = "level must be >= 1")
     private Integer level;
 
