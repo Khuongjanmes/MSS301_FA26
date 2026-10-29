@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
@@ -167,8 +168,9 @@ public class PostServiceImpl implements PostService {
         return ratePerPost.multiply(BigDecimal.valueOf(days));
     }
 
+    // Use getTime(): java.sql.Date loaded by Hibernate throws on toInstant()
     private java.time.LocalDate toLocalDate(Date date) {
-        return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
+        return Instant.ofEpochMilli(date.getTime()).atZone(ZoneId.systemDefault()).toLocalDate();
     }
 
     private PostDTO toDTO(Post p) {
