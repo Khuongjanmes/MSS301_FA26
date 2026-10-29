@@ -9,30 +9,33 @@ import java.util.Date;
 
 public class PostDTO {
 
+    // Required-field checks only run on create; PUT is a partial update
+    public interface OnCreate {}
+
     private Long postId;
 
-    @NotBlank(message = "advertiserName is required")
+    @NotBlank(groups = PostDTO.OnCreate.class, message = "advertiserName is required")
     @Size(max = 100)
     private String advertiserName;
 
-    @NotBlank(message = "advertiserEmail is required")
+    @NotBlank(groups = PostDTO.OnCreate.class, message = "advertiserEmail is required")
     @Email(message = "advertiserEmail is invalid")
     @Size(max = 100)
     private String advertiserEmail;
 
-    @NotBlank(message = "advertiserPhone is required")
+    @NotBlank(groups = PostDTO.OnCreate.class, message = "advertiserPhone is required")
     @Size(max = 20)
     private String advertiserPhone;
 
-    @NotNull(message = "startDate is required")
+    @NotNull(groups = PostDTO.OnCreate.class, message = "startDate is required")
     @JsonFormat(pattern = "dd/MM/yyyy")
     private Date startDate;
 
-    @NotNull(message = "endDate is required")
+    @NotNull(groups = PostDTO.OnCreate.class, message = "endDate is required")
     @JsonFormat(pattern = "dd/MM/yyyy")
     private Date endDate;
 
-    @NotNull(message = "numberOfPosts is required")
+    @NotNull(groups = PostDTO.OnCreate.class, message = "numberOfPosts is required")
     @Min(value = 1, message = "numberOfPosts must be >= 1")
     private Integer numberOfPosts;
 
@@ -44,7 +47,7 @@ public class PostDTO {
             message = "status must be DRAFT, SCHEDULED, PUBLISHED or CANCELLED")
     private String status;
 
-    @NotNull(message = "userId is required")
+    @NotNull(groups = PostDTO.OnCreate.class, message = "userId is required")
     private Long userId;
 
     public Long getPostId() { return postId; }
