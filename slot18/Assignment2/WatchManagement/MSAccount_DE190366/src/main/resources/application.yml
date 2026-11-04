@@ -1,4 +1,4 @@
-# [TODO-2.2: datasource DBAccount + naming strategy]
+# [TODO-2.2, TODO-3.2: datasource DBAccount + naming strategy, cấu hình JWT]
 server:
   port: 8081
 
@@ -22,8 +22,14 @@ spring:
         # Giữ NGUYÊN tên trong @Table/@Column (StoreAccounts, WatchID...) đúng như đề bài.
         # Mặc định Spring Boot đổi thành store_accounts, watch_id...
         physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
-    show-sql: false
+    show-sql: true
     # Hibernate 7 tự nhận dialect SQL Server từ JDBC metadata -> không cần khai báo hibernate.dialect
+
+jwt:
+  # Không để giá trị mặc định: secret phải đến từ biến môi trường / .env (không commit).
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:900000}            # 15 phút
+  refresh-expiration: ${REFRESH_EXPIRATION:604800000}  # 7 ngày
 
 logging:
   level:
