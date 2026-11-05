@@ -1,7 +1,10 @@
 package com.mss301.brand.service;
 
 import com.mss301.brand.dto.AssignmentResponse;
+import com.mss301.brand.dto.BrandResponse;
+import com.mss301.brand.dto.BrandWatchesResponse;
 import com.mss301.brand.entity.BrandWatch;
+import com.mss301.brand.entity.WatchBrand;
 import com.mss301.brand.repository.BrandRepository;
 import com.mss301.brand.repository.BrandWatchRepository;
 import lombok.RequiredArgsConstructor;
@@ -12,9 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
-// [TODO-5.2, TODO-5.3: local transaction + compensation idempotent]
+// [TODO-5.2, TODO-5.3, TODO-5.5: local transaction + compensation idempotent, truy vấn brand]
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -22,6 +26,27 @@ public class BrandService {
 
     private final BrandRepository brandRepository;
     private final BrandWatchRepository brandWatchRepository;
+
+    // ===================== Public API (đọc) =====================
+
+    // [TODO-5.5]
+    @Transactional(readOnly = true)
+    public List<BrandResponse> findAll() {
+        return brandRepository.findAll().stream().map(this::toResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public BrandResponse findById(Integer id) {
+        return toResponse(getBrand(id));
+    }
+
+    @Transactional(readOnly = true)
+    public BrandWatchesResponse watchesOf(Integer brandId) {
+        WatchBrand brand = getBrand(brandId);
+        List<Integer> ids = brandWatchRepository.findByBrandIdOrderByWatchIdAsc(brandId).stream()
+            .map(BrandWatch::getWatchId).toList();
+        return new BrandWatchesResponse(brandId, brand.getBrandName(), ids.size(), ids);
+    }
 
     // ============ Internal API cho Saga (LOCAL TRANSACTION trên DBBrand) ============
 
@@ -66,5 +91,21 @@ public class BrandService {
         brandWatchRepository.delete(existing.get());
         log.info("[SAGA-PARTICIPANT] UNASSIGN watch={} from brand={}", watchId, previous);
         return new AssignmentResponse(watchId, null, previous, "UNASSIGNED");
+    }
+
+    // ===================== helpers =====================
+
+    private WatchBrand getBrand(Integer id) {
+        return brandRepository.findById(id)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Brand not found with id: " + id));
+    }
+
+    private BrandResponse toResponse(WatchBrand b) {
+        return BrandResponse.builder()
+            .brandId(b.getBrandId())
+            .brandName(b.getBrandName())
+            .countryOfOrigin(b.getCountryOfOrigin())
+            .watchCount(brandWatchRepository.countByBrandId(b.getBrandId()))
+            .build();
     }
 }
