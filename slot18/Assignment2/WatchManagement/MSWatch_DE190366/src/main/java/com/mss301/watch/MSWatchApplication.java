@@ -2,8 +2,11 @@ package com.mss301.watch;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.openfeign.EnableFeignClients;
 
+// [TODO-6.7: bật Feign để gọi MSBrand]
 @SpringBootApplication
+@EnableFeignClients
 public class MSWatchApplication {
 
     public static void main(String[] args) {
