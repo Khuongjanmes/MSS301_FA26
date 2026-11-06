@@ -1,0 +1,2173 @@
+{
+  "info": {
+    "name": "WatchManagement Saga",
+    "description": "Proves saga completion and compensation through the API Gateway. Run the whole collection in order (requests share variables). Scenario letters follow section 6.2 of the assignment guide. Open the Console to see each saga's step chain.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const now = new Date();",
+          "const pad = n => String(n).padStart(2, \"0\");",
+          "pm.collectionVariables.set(\"today\", now.getFullYear() + \"-\" + pad(now.getMonth() + 1) + \"-\" + pad(now.getDate()));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 - Setup",
+      "description": "Login and remember the starting brand counts.",
+      "item": [
+        {
+          "name": "Login admin",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"adminsys\",\n  \"password\": \"@1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"has both tokens\", () => { pm.expect(d.accessToken).to.be.a(\"string\"); pm.expect(d.refreshToken).to.be.a(\"string\"); });",
+                  "pm.test(\"role=1\", () => pm.expect(d.role).to.eql(1));",
+                  "pm.collectionVariables.set(\"adminToken\", d.accessToken);",
+                  "pm.collectionVariables.set(\"adminRefresh\", d.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login staff02",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"staff02\",\n  \"password\": \"@1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"role=2\", () => pm.expect(d.role).to.eql(2));",
+                  "pm.collectionVariables.set(\"staffToken\", d.accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login member01",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"member01\",\n  \"password\": \"@1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"role=3\", () => pm.expect(d.role).to.eql(3));",
+                  "pm.collectionVariables.set(\"memberToken\", d.accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remember brand counts (baseline)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const brands = pm.response.json().data;",
+                  "pm.test(\"5 brands, each with watchCount\", () => { pm.expect(brands.length).to.eql(5); brands.forEach(b => pm.expect(b.watchCount).to.be.a(\"number\")); });",
+                  "const base = {}; brands.forEach(b => base[b.brandId] = b.watchCount);",
+                  "pm.collectionVariables.set(\"baseline\", JSON.stringify(base));",
+                  "console.log(\"baseline\", base);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 - JWT and permissions",
+      "description": "401 / 403 / inactive / refresh / forged X-User-Role.",
+      "item": [
+        {
+          "name": "List watches without token -> 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "pm.test(\"every watch has categoryName\", () => list.forEach(w => pm.expect(w.categoryName).to.be.a(\"string\").and.not.empty));",
+                  "pm.test(\"newest first\", () => { const ids = list.map(w => w.watchId); pm.expect(ids).to.eql([...ids].sort((a, b) => b - a)); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List brands without token -> 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/brands"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create watch without token -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Forged X-User-Role without token -> 401",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "X-User-Role",
+                "value": "1"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Staff token + forged X-User-Role: 1 -> 403",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staffToken}}"
+              },
+              {
+                "key": "X-User-Role",
+                "value": "1"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Member token cannot delete -> 403",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{memberToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Staff token cannot create -> 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inactive member02 -> 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"member02\",\n  \"password\": \"@1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));",
+                  "pm.test(\"message: Account is inactive\", () => pm.expect(pm.response.json().message).to.include(\"Account is inactive\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inactive staff01 -> 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"staff01\",\n  \"password\": \"@1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong password -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"adminsys\",\n  \"password\": \"wrong\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown username -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"nobody\",\n  \"password\": \"@1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing username -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"@1\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh with refresh token -> 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/refresh",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{adminRefresh}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"new access token\", () => pm.expect(pm.response.json().data.accessToken).to.be.a(\"string\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh with access token -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/refresh",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{adminToken}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"message: Token is not a refresh token\", () => pm.expect(pm.response.json().message).to.include(\"Token is not a refresh token\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh token used as Bearer -> 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminRefresh}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tampered token -> 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}x"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Internal API is not routed -> 404",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/internal/brands/1/watches/1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout without token -> 200",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/logout"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - Validation before the saga",
+      "description": "Invalid input is rejected with 400 and creates no SagaStates row.",
+      "item": [
+        {
+          "name": "Remember latest saga",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas?limit=1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "pm.collectionVariables.set(\"latestSaga\", list.length ? list[0].sagaId : \"none\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Name of exactly 10 characters -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"TenChars10\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Price 99.99 -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 99.99,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "ReleaseDate not today -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"2020-01-01\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"message: Release date must be today\", () => pm.expect(pm.response.json().message).to.include(\"Release date must be today\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing fields -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Only A Long Name\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown category -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 999,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"message: Category not found\", () => pm.expect(pm.response.json().message).to.include(\"Category not found\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed date -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"not-a-date\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid body from non-admin -> 403 (not 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "No new saga was created",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas?limit=1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "const latest = list.length ? list[0].sagaId : \"none\";",
+                  "pm.test(\"latest saga unchanged\", () => pm.expect(latest).to.eql(pm.collectionVariables.get(\"latestSaga\")));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - A: CREATE success",
+      "description": "1 request updates 2 databases; the new watch is at the top of the list.",
+      "item": [
+        {
+          "name": "Create watch (boundary: 11 chars, price 100) -> 201",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Watch1\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 100,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"has watchId and categoryName\", () => { pm.expect(d.watchId).to.be.a(\"number\"); pm.expect(d.categoryName).to.eql(\"Dive Watches\"); });",
+                  "pm.collectionVariables.set(\"newWatchId\", d.watchId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga log",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/{{sagaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const saga = pm.response.json().data;",
+                  "const chain = saga.steps.map(s => s.phase + \" \" + s.stepName + \" \" + s.result);",
+                  "console.log(pm.info.requestName, saga.status, chain);",
+                  "pm.test(\"status=COMPLETED\", () => pm.expect(saga.status).to.eql(\"COMPLETED\"));",
+                  "pm.test(\"steps in exact order\", () => pm.expect(chain).to.eql([\"EXECUTE CREATE_WATCH SUCCESS\", \"EXECUTE ASSIGN_BRAND SUCCESS\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "New watch is first in the list",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "const w = list.find(x => x.watchId === id);",
+                  "pm.test(\"list contains watch \" + id, () => pm.expect(Boolean(w)).to.eql(true));",
+                  "pm.test(\"new watch is first\", () => pm.expect(list[0].watchId).to.eql(id));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "MSBrand: brand 1 has the watch (+1)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/1/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "pm.test(\"brand contains watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(true));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +1\", () => pm.expect(d.watchCount).to.eql(base + (1)));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 - B: CREATE with brand 999",
+      "description": "Step 1 was committed, then undone by DELETE_WATCH.",
+      "item": [
+        {
+          "name": "Create with brand 999 -> 400 COMPENSATED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 999,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);",
+                  "const body = pm.response.json();",
+                  "pm.test(\"success=false\", () => pm.expect(body.success).to.eql(false));",
+                  "pm.test(\"sagaStatus=COMPENSATED\", () => pm.expect(body.data.sagaStatus).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"failedStep=ASSIGN_BRAND\", () => pm.expect(body.data.failedStep).to.eql(\"ASSIGN_BRAND\"));",
+                  "pm.test(\"data.sagaId matches header\", () => pm.expect(body.data.sagaId).to.eql(sagaId));",
+                  "pm.test(\"reason mentions cause\", () => pm.expect(body.data.reason).to.include(\"Brand not found with id: 999\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga log",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/{{sagaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const saga = pm.response.json().data;",
+                  "const chain = saga.steps.map(s => s.phase + \" \" + s.stepName + \" \" + s.result);",
+                  "console.log(pm.info.requestName, saga.status, chain);",
+                  "pm.test(\"status=COMPENSATED\", () => pm.expect(saga.status).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"steps in exact order\", () => pm.expect(chain).to.eql([\"EXECUTE CREATE_WATCH SUCCESS\", \"EXECUTE ASSIGN_BRAND FAILED\", \"COMPENSATE DELETE_WATCH SUCCESS\"]));",
+                  "pm.test(\"a WatchID was really allocated\", () => pm.expect(saga.watchId).to.be.above(Number(pm.collectionVariables.get(\"newWatchId\"))));",
+                  "pm.collectionVariables.set(\"failedWatchId\", saga.watchId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Watch is gone from DBWatch",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"failedWatchId\"));",
+                  "const w = list.find(x => x.watchId === id);",
+                  "pm.test(\"list does not contain watch \" + id, () => pm.expect(Boolean(w)).to.eql(false));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "MSBrand: brand 1 count unchanged",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/1/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"failedWatchId\"));",
+                  "pm.test(\"brand does not contain watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(false));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +1\", () => pm.expect(d.watchCount).to.eql(base + (1)));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 - C: CREATE + fail after step 2",
+      "description": "MSBrand already committed; UNASSIGN_BRAND runs BEFORE DELETE_WATCH (LIFO).",
+      "item": [
+        {
+          "name": "Create + X-Saga-Fail-After-Step: 2 -> 500",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Saga-Fail-After-Step",
+                "value": "2"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 500\", () => pm.response.to.have.status(500));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);",
+                  "const body = pm.response.json();",
+                  "pm.test(\"success=false\", () => pm.expect(body.success).to.eql(false));",
+                  "pm.test(\"sagaStatus=COMPENSATED\", () => pm.expect(body.data.sagaStatus).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"failedStep=FAULT_INJECTION after ASSIGN_BRAND\", () => pm.expect(body.data.failedStep).to.eql(\"FAULT_INJECTION after ASSIGN_BRAND\"));",
+                  "pm.test(\"data.sagaId matches header\", () => pm.expect(body.data.sagaId).to.eql(sagaId));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga log (LIFO)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/{{sagaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const saga = pm.response.json().data;",
+                  "const chain = saga.steps.map(s => s.phase + \" \" + s.stepName + \" \" + s.result);",
+                  "console.log(pm.info.requestName, saga.status, chain);",
+                  "pm.test(\"status=COMPENSATED\", () => pm.expect(saga.status).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"steps in exact order\", () => pm.expect(chain).to.eql([\"EXECUTE CREATE_WATCH SUCCESS\", \"EXECUTE ASSIGN_BRAND SUCCESS\", \"FAULT FAULT_INJECTION TRIGGERED\", \"COMPENSATE UNASSIGN_BRAND SUCCESS\", \"COMPENSATE DELETE_WATCH SUCCESS\"]));",
+                  "pm.collectionVariables.set(\"failedWatchId\", saga.watchId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Watch is gone from DBWatch",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"failedWatchId\"));",
+                  "const w = list.find(x => x.watchId === id);",
+                  "pm.test(\"list does not contain watch \" + id, () => pm.expect(Boolean(w)).to.eql(false));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "MSBrand: link was removed",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/1/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"failedWatchId\"));",
+                  "pm.test(\"brand does not contain watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(false));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +1\", () => pm.expect(d.watchCount).to.eql(base + (1)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Next create proves WatchID skipped",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Id Jump Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 5,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "const d = pm.response.json().data;",
+                  "const failed = Number(pm.collectionVariables.get(\"failedWatchId\"));",
+                  "pm.test(\"new id follows the compensated id (\" + failed + \")\", () => pm.expect(d.watchId).to.eql(failed + 1));",
+                  "pm.test(\"id skipped the 2 compensated watches\", () => pm.expect(d.watchId).to.eql(Number(pm.collectionVariables.get(\"newWatchId\")) + 3));",
+                  "pm.collectionVariables.set(\"jumpWatchId\", d.watchId);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 - UPDATE: success, D, E",
+      "description": "RESTORE_WATCH from the snapshot; ASSIGN_BRAND_BACK to the old brand.",
+      "item": [
+        {
+          "name": "Update (brand 1 -> 2) -> 200",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/{{newWatchId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Watch Updated\",\n  \"categoryId\": 1,\n  \"brandId\": 2,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 2000,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);",
+                  "const d = pm.response.json().data;",
+                  "pm.test(\"data updated\", () => { pm.expect(d.name).to.eql(\"Saga Watch Updated\"); pm.expect(d.brandId).to.eql(2); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Saga log",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/{{sagaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const saga = pm.response.json().data;",
+                  "const chain = saga.steps.map(s => s.phase + \" \" + s.stepName + \" \" + s.result);",
+                  "console.log(pm.info.requestName, saga.status, chain);",
+                  "pm.test(\"status=COMPLETED\", () => pm.expect(saga.status).to.eql(\"COMPLETED\"));",
+                  "pm.test(\"steps in exact order\", () => pm.expect(chain).to.eql([\"EXECUTE UPDATE_WATCH SUCCESS\", \"EXECUTE ASSIGN_BRAND SUCCESS\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "MSBrand: brand 2 has the watch (+1)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/2/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "pm.test(\"brand contains watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(true));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +1\", () => pm.expect(d.watchCount).to.eql(base + (1)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "MSBrand: brand 1 no longer has it",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/1/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "pm.test(\"brand does not contain watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(false));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +0\", () => pm.expect(d.watchCount).to.eql(base + (0)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D: update to brand 999 -> 400",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/{{newWatchId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Should Be Restored\",\n  \"categoryId\": 1,\n  \"brandId\": 999,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 3000,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", () => pm.response.to.have.status(400));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);",
+                  "const body = pm.response.json();",
+                  "pm.test(\"success=false\", () => pm.expect(body.success).to.eql(false));",
+                  "pm.test(\"sagaStatus=COMPENSATED\", () => pm.expect(body.data.sagaStatus).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"failedStep=ASSIGN_BRAND\", () => pm.expect(body.data.failedStep).to.eql(\"ASSIGN_BRAND\"));",
+                  "pm.test(\"data.sagaId matches header\", () => pm.expect(body.data.sagaId).to.eql(sagaId));",
+                  "pm.test(\"reason mentions cause\", () => pm.expect(body.data.reason).to.include(\"Brand not found\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D: saga log",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/{{sagaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const saga = pm.response.json().data;",
+                  "const chain = saga.steps.map(s => s.phase + \" \" + s.stepName + \" \" + s.result);",
+                  "console.log(pm.info.requestName, saga.status, chain);",
+                  "pm.test(\"status=COMPENSATED\", () => pm.expect(saga.status).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"steps in exact order\", () => pm.expect(chain).to.eql([\"EXECUTE UPDATE_WATCH SUCCESS\", \"EXECUTE ASSIGN_BRAND FAILED\", \"COMPENSATE RESTORE_WATCH SUCCESS\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "D: watch restored from snapshot",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "const w = list.find(x => x.watchId === id);",
+                  "pm.test(\"list contains watch \" + id, () => pm.expect(Boolean(w)).to.eql(true));",
+                  "pm.test(\"name, brand and price are the old values\", () => { pm.expect(w.name).to.eql(\"Saga Watch Updated\"); pm.expect(w.brandId).to.eql(2); pm.expect(w.price).to.eql(2000); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E: update to brand 3 + fail after step 2 -> 500",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Saga-Fail-After-Step",
+                "value": "2"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/{{newWatchId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Should Be Restored\",\n  \"categoryId\": 1,\n  \"brandId\": 3,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 3000,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 500\", () => pm.response.to.have.status(500));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);",
+                  "const body = pm.response.json();",
+                  "pm.test(\"success=false\", () => pm.expect(body.success).to.eql(false));",
+                  "pm.test(\"sagaStatus=COMPENSATED\", () => pm.expect(body.data.sagaStatus).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"failedStep=FAULT_INJECTION after ASSIGN_BRAND\", () => pm.expect(body.data.failedStep).to.eql(\"FAULT_INJECTION after ASSIGN_BRAND\"));",
+                  "pm.test(\"data.sagaId matches header\", () => pm.expect(body.data.sagaId).to.eql(sagaId));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E: saga log (LIFO)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/{{sagaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const saga = pm.response.json().data;",
+                  "const chain = saga.steps.map(s => s.phase + \" \" + s.stepName + \" \" + s.result);",
+                  "console.log(pm.info.requestName, saga.status, chain);",
+                  "pm.test(\"status=COMPENSATED\", () => pm.expect(saga.status).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"steps in exact order\", () => pm.expect(chain).to.eql([\"EXECUTE UPDATE_WATCH SUCCESS\", \"EXECUTE ASSIGN_BRAND SUCCESS\", \"FAULT FAULT_INJECTION TRIGGERED\", \"COMPENSATE ASSIGN_BRAND_BACK SUCCESS\", \"COMPENSATE RESTORE_WATCH SUCCESS\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E: brand 2 still has the watch",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/2/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "pm.test(\"brand contains watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(true));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +1\", () => pm.expect(d.watchCount).to.eql(base + (1)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E: brand 3 does not have it",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/3/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "pm.test(\"brand does not contain watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(false));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +0\", () => pm.expect(d.watchCount).to.eql(base + (0)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "E: watch restored from snapshot",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "const w = list.find(x => x.watchId === id);",
+                  "pm.test(\"list contains watch \" + id, () => pm.expect(Boolean(w)).to.eql(true));",
+                  "pm.test(\"name, brand and price are the old values\", () => { pm.expect(w.name).to.eql(\"Saga Watch Updated\"); pm.expect(w.brandId).to.eql(2); pm.expect(w.price).to.eql(2000); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update unknown watch -> 404",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/999999",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Saga Test Watch\",\n  \"categoryId\": 1,\n  \"brandId\": 1,\n  \"caseMaterial\": \"Stainless Steel\",\n  \"strapMaterial\": \"Rubber\",\n  \"waterpMaterial\": \"200 meters\",\n  \"price\": 1500,\n  \"releaseDate\": \"{{today}}\",\n  \"stock\": 10\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 - DELETE: F, G (pivot)",
+      "description": "Compensation on the MSBrand side; after the pivot there is no way back.",
+      "item": [
+        {
+          "name": "F: delete + fail after step 1 -> 500",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Saga-Fail-After-Step",
+                "value": "1"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/{{newWatchId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 500\", () => pm.response.to.have.status(500));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);",
+                  "const body = pm.response.json();",
+                  "pm.test(\"success=false\", () => pm.expect(body.success).to.eql(false));",
+                  "pm.test(\"sagaStatus=COMPENSATED\", () => pm.expect(body.data.sagaStatus).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"failedStep=FAULT_INJECTION after UNASSIGN_BRAND\", () => pm.expect(body.data.failedStep).to.eql(\"FAULT_INJECTION after UNASSIGN_BRAND\"));",
+                  "pm.test(\"data.sagaId matches header\", () => pm.expect(body.data.sagaId).to.eql(sagaId));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F: saga log",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/{{sagaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const saga = pm.response.json().data;",
+                  "const chain = saga.steps.map(s => s.phase + \" \" + s.stepName + \" \" + s.result);",
+                  "console.log(pm.info.requestName, saga.status, chain);",
+                  "pm.test(\"status=COMPENSATED\", () => pm.expect(saga.status).to.eql(\"COMPENSATED\"));",
+                  "pm.test(\"steps in exact order\", () => pm.expect(chain).to.eql([\"EXECUTE UNASSIGN_BRAND SUCCESS\", \"FAULT FAULT_INJECTION TRIGGERED\", \"COMPENSATE ASSIGN_BRAND_BACK SUCCESS\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F: watch still exists",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "const w = list.find(x => x.watchId === id);",
+                  "pm.test(\"list contains watch \" + id, () => pm.expect(Boolean(w)).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "F: brand 2 still has the watch",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/2/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "pm.test(\"brand contains watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(true));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +1\", () => pm.expect(d.watchCount).to.eql(base + (1)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "G: delete + fail after step 2 (pivot) -> 200",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "X-Saga-Fail-After-Step",
+                "value": "2"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/{{newWatchId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "G: saga log (FAULT SKIPPED)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/{{sagaId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const saga = pm.response.json().data;",
+                  "const chain = saga.steps.map(s => s.phase + \" \" + s.stepName + \" \" + s.result);",
+                  "console.log(pm.info.requestName, saga.status, chain);",
+                  "pm.test(\"status=COMPLETED\", () => pm.expect(saga.status).to.eql(\"COMPLETED\"));",
+                  "pm.test(\"steps in exact order\", () => pm.expect(chain).to.eql([\"EXECUTE UNASSIGN_BRAND SUCCESS\", \"EXECUTE DELETE_WATCH SUCCESS\", \"FAULT FAULT_INJECTION SKIPPED\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "G: watch is gone",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "const w = list.find(x => x.watchId === id);",
+                  "pm.test(\"list does not contain watch \" + id, () => pm.expect(Boolean(w)).to.eql(false));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "G: brand 2 is back to baseline",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands/2/watches"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json().data;",
+                  "const id = Number(pm.collectionVariables.get(\"newWatchId\"));",
+                  "pm.test(\"brand does not contain watch \" + id, () => pm.expect(d.watchIds.includes(id)).to.eql(false));",
+                  "pm.test(\"watchCount = size of watchIds\", () => pm.expect(d.watchCount).to.eql(d.watchIds.length));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"))[d.brandId];",
+                  "pm.test(\"watchCount = baseline +0\", () => pm.expect(d.watchCount).to.eql(base + (0)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete unknown watch -> 404",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/999999"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Clean up: delete the id-jump watch -> 200",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/watches/{{jumpWatchId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const sagaId = pm.response.headers.get(\"X-Saga-Id\");",
+                  "pm.test(\"has X-Saga-Id header\", () => pm.expect(sagaId).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"sagaId\", sagaId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Every brand count is back to baseline",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/brands"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const base = JSON.parse(pm.collectionVariables.get(\"baseline\"));",
+                  "pm.response.json().data.forEach(b => pm.test(b.brandName + \" = \" + base[b.brandId], () => pm.expect(b.watchCount).to.eql(base[b.brandId])));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "08 - Saga monitoring",
+      "description": "/api/sagas is for Admin only.",
+      "item": [
+        {
+          "name": "Admin lists sagas -> 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas?limit=5"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json().data;",
+                  "pm.test(\"at most 5, newest first\", () => { pm.expect(list.length).to.be.within(1, 5); pm.expect(list[0].sagaId).to.eql(pm.collectionVariables.get(\"sagaId\")); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Staff cannot list sagas -> 403",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staffToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "No token -> 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/sagas"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown saga -> 404",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/sagas/does-not-exist"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
