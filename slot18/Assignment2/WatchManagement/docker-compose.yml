@@ -1,0 +1,98 @@
+# [TODO-10.1, TODO-10.2, TODO-10.3: sqlserver + healthcheck, db-init, biến môi trường]
+#
+# Chỉ Gateway được mở cổng ra máy host. MSBrand/MSWatch tin header X-User-Role và MSBrand có API
+# /internal/** cho Saga, nên nếu mở 8081-8083 thì client sẽ đi vòng qua bước kiểm tra JWT.
+
+x-timezone: &timezone
+  # Container mặc định chạy UTC. WatchService so releaseDate với LocalDate.now(), nên trước 07:00
+  # giờ Việt Nam việc tạo watch với ngày hôm nay sẽ bị từ chối nếu không đặt múi giờ.
+  JAVA_TOOL_OPTIONS: "-Duser.timezone=Asia/Ho_Chi_Minh"
+
+x-database: &database
+  DB_HOST: sqlserver
+  # SQL Server trong container bắt buộc mật khẩu mạnh. Đặt DOCKER_DB_PASSWORD khi mật khẩu
+  # DB_PASSWORD của SQL Server cài trên máy không đạt yêu cầu này.
+  DB_PASSWORD: "${DOCKER_DB_PASSWORD:-${DB_PASSWORD}}"
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${DOCKER_DB_PASSWORD:-${DB_PASSWORD}}"
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      # Image 2022 mới dùng mssql-tools18 và cần -C (trust server certificate)
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q \"SELECT 1\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  # Tạo 3 database (Database per Service) trước khi các service khởi động
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      DB_PASSWORD: "${DOCKER_DB_PASSWORD:-${DB_PASSWORD}}"
+    entrypoint:
+      - /bin/bash
+      - -c
+      # -b: trả exit code khác 0 khi câu SQL lỗi, nếu không các service vẫn khởi động khi chưa có DB
+      - |
+        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -P "$$DB_PASSWORD" -C -b -Q "
+        IF DB_ID('DBAccount') IS NULL CREATE DATABASE DBAccount;
+        IF DB_ID('DBBrand')   IS NULL CREATE DATABASE DBBrand;
+        IF DB_ID('DBWatch')   IS NULL CREATE DATABASE DBWatch;"
+    restart: "no"
+
+  ms-account:
+    build: ./MSAccount_DE190366
+    environment:
+      <<: [*timezone, *database]
+      JWT_SECRET: "${JWT_SECRET}"
+      JWT_EXPIRATION: "${JWT_EXPIRATION}"
+      REFRESH_EXPIRATION: "${REFRESH_EXPIRATION}"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  ms-brand:
+    build: ./MSBrand_DE190366
+    environment:
+      <<: [*timezone, *database]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  ms-watch:
+    build: ./MSWatch_DE190366
+    environment:
+      <<: [*timezone, *database]
+      BRAND_SERVICE_URL: "http://ms-brand:8082"
+      SAGA_FAULT_INJECTION: "${SAGA_FAULT_INJECTION:-true}"   # mặc định true để demo; production: false
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      ms-brand:
+        condition: service_started
+
+  api-gateway:
+    build: ./APIGateway_DE190366
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *timezone
+      JWT_SECRET: "${JWT_SECRET}"
+      ACCOUNT_SERVICE_URL: "http://ms-account:8081"
+      BRAND_SERVICE_URL: "http://ms-brand:8082"
+      WATCH_SERVICE_URL: "http://ms-watch:8083"
+    depends_on:
+      - ms-account
+      - ms-brand
+      - ms-watch
+
+volumes:
+  sqldata:
